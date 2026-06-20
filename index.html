@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Charlytaxi Air - Premium Pinball</title>
+    <style>
+        body {
+            background-color: #0a0a0a;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 10px;
+        }
+        h1 { color: #ffcc00; font-size: 24px; margin: 5px 0; }
+        canvas {
+            background-color: #111;
+            border: 3px solid #ffcc00;
+            box-shadow: 0 0 20px rgba(255, 204, 0, 0.4);
+            border-radius: 8px;
+        }
+        .info { color: #888; font-size: 12px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h1>CHARLYTAXI AIR</h1>
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div class="info">LEERTASTE gedrückt halten = Power laden | LINKS/RECHTS = Flügel</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Sound System
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playTone(freq, duration) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = freq;
+            osc.type = 'sine';
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // Spielvariablen
+        let score = 0;
+        let highscore = localStorage.getItem('charlytaxi_highscore') || 0;
+        let gameState = 'ready'; 
+        let launchPower = 0;
+
+        // Das Taxi (Ball)
+        const ball = { x: 350, y: 520, r: 8, dx: 0, dy: 0 };
+
+        // Schläger Einstellungen - WEIT AUSSEN
+        const flipY = 560;
+        const flipLen = 95; // Minimal angepasst, damit sie sich nicht überkreuzen
+        const flipThick = 6;
+        let leftAngle = 0.5;
+        let rightAngle = Math.PI - 0.5;
+
+        // Payerne Themen-Hindernisse
+        const bumpers = [
+            { x: 200, y: 120, r: 30, pts: 500, col: '#ffcc00', label: 'PAYERNE' },
+            { x: 100, y: 220, r: 25, pts: 200, col: '#fff', label: 'ALPEN' },
+            { x: 300, y: 220, r: 25, pts: 200, col: '#fff', label: 'ALPEN' },
+            { x: 150, y: 330, r: 20, pts: 100, col: '#aaddff', label: 'HOTEL' },
+            { x: 250, y: 330, r: 20, pts: 100, col: '#aaddff', label: 'HOTEL' }
+        ];
+
+        const keys = { left: false, right: false, space: false };
+
+        window.addEventListener('keydown', function(e) {
+            if (e.code === 'ArrowLeft') keys.left = true;
+            if (e.code === 'ArrowRight') keys.right = true;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (gameState === 'ready' || gameState === 'gameover') {
+                    gameState = 'launching';
+                    launchPower = 0;
+                }
+                keys.space = true;
+            }
+        });
+
+        window.addEventListener('keyup', function(e) {
+            if (e.code === 'ArrowLeft') keys.left = false;
+            if (e.code === 'ArrowRight') keys.right = false;
+            if (e.code === 'Space') {
+                if (gameState === 'launching') {
+                    ball.dy = -(launchPower * 0.2) - 5; 
+                    ball.dx = -2;
+                    gameState = 'playing';
+                    playTone(600, 0.2);
+                }
+                keys.space = false;
+            }
+        });
+
+        // Kollisionsmathematik
+        function getLineDistance(px, py, x1, y1, x2, y2) {
+            let dx = x2 - x1, dy = y2 - y1;
+            let t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+            if (t < 0) t = 0; if (t > 1) t = 1;
+            let nearX = x1 + t * dx, nearY = y1 + t * dy;
+            return Math.sqrt((px - nearX) * (px - nearX) + (py - nearY) * (py - nearY));
+        }
+
+        function update() {
+            if (gameState === 'launching') {
+                if (launchPower < 100) launchPower += 2;
+            }
+
+            if (gameState !== 'playing') return;
+
+            ball.dy += 0.15;
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+
+            leftAngle += ((keys.left ? -0.6 : 0.5) - leftAngle) * 0.4;
+            rightAngle += ((keys.right ? Math.PI + 0.6 : Math.PI - 0.5) - rightAngle) * 0.4;
+
+            if (ball.x - ball.r < 40) { ball.x = 40 + ball.r; ball.dx = Math.abs(ball.dx) * 0.8; }
+            if (ball.x + ball.r > 360) { ball.x = 360 - ball.r; ball.dx = -Math.abs(ball.dx) * 0.8; }
+            if (ball.y - ball.r < 40) { ball.y = 40 + ball.r; ball.dy = Math.abs(ball.dy) * 0.8; }
+
+            for (let b of bumpers) {
+                let dx = ball.x - b.x, dy = ball.y - b.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 1) dist = 1;
+                if (dist < ball.r + b.r) {
+                    ball.dx = (dx / dist) * 7;
+                    ball.dy = (dy / dist) * 7;
+                    score += b.pts;
+                    playTone(800, 0.1); 
+                }
+            }
+
+            // LINKER FLÜGEL (Ganz weit aussen bei 110)
+            let lx1 = 110, ly1 = flipY;
+            let lx2 = lx1 + Math.cos(leftAngle) * flipLen;
+            if (getLineDistance(ball.x, ball.y, lx1, ly1, lx2, ly1) < ball.r + flipThick && ball.dy > 0) {
+                ball.dy = -12; ball.dx += 4; ball.y = ly1 - ball.r - 5;
+                playTone(400, 0.1); 
+            }
+
+            // RECHTER FLÜGEL (Ganz weit aussen bei 290)
+            let rx1 = 290, ry1 = flipY;
+            let rx2 = rx1 + Math.cos(rightAngle) * flipLen;
+            if (getLineDistance(ball.x, ball.y, rx1, ry1, rx2, ry1) < ball.r + flipThick && ball.dy > 0) {
+                ball.dy = -12; ball.dx -= 4; ball.y = ry1 - ball.r - 5;
+                playTone(400, 0.1); 
+            }
+
+            if (ball.y > 620) {
+                gameState = 'gameover';
+                if (score > highscore) {
+                    highscore = score;
+                    localStorage.setItem('charlytaxi_highscore', highscore);
+                }
+                playTone(150, 0.5); 
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, 400, 600);
+
+            // Spielfeld Ränder
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(40, 40); ctx.lineTo(40, 600); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(360, 40); ctx.lineTo(360, 600); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(40, 40); ctx.lineTo(360, 40); ctx.stroke();
+
+            // Bumper zeichnen
+            for (let b of bumpers) {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+                ctx.fillStyle = b.col === '#ffcc00' ? '#332200' : '#1a2a3a';
+                ctx.fill();
+                ctx.strokeStyle = b.col;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                ctx.fillStyle = b.col;
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(b.label, b.x, b.y + 4);
+            }
+
+            // Flügel zeichnen (Neue Positionen 110 und 290)
+            ctx.lineWidth = 12; ctx.lineCap = 'round'; ctx.strokeStyle = '#ffcc00';
+            
+            // Linker Flügel
+            ctx.beginPath(); 
+            ctx.moveTo(110, flipY); 
+            ctx.lineTo(110 + Math.cos(leftAngle) * flipLen, flipY + Math.sin(leftAngle) * flipLen); 
+            ctx.stroke();
+            
+            // Rechter Flügel
+            ctx.beginPath(); 
+            ctx.moveTo(290, flipY); 
+            ctx.lineTo(290 + Math.cos(rightAngle) * flipLen, flipY + Math.sin(rightAngle) * flipLen); 
+            ctx.stroke();
+
+            // Power Leiste
+            if (gameState === 'launching') {
+                ctx.fillStyle = '#333'; ctx.fillRect(340, 500, 20, 100);
+                ctx.fillStyle = launchPower > 80 ? '#ff3333' : launchPower > 40 ? '#ffcc00' : '#33ff33';
+                ctx.fillRect(340, 600 - (launchPower), 20, launchPower);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(340, 500, 20, 100);
+            }
+
+            // Taxi zeichnen
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffcc00'; ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke();
+
+            // UI
+            ctx.fillStyle = '#fff'; ctx.font = '16px Courier New'; ctx.textAlign = 'left';
+            ctx.fillText('SCORE: ' + score, 50, 25);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#ffcc00';
+            ctx.fillText('BEST: ' + highscore, 350, 25);
+
+            if (gameState === 'ready') drawText('CHARLYTAXI AIR', 'Leertaste HALTEN zum Aufladen');
+            if (gameState === 'gameover') drawText('ABGESTUERZT', 'Leertaste fuer Neustart');
+        }
+
+        function drawText(t1, t2) {
+            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(60, 260, 280, 70);
+            ctx.fillStyle = '#ffcc00'; ctx.font = '20px Courier New'; ctx.textAlign = 'center';
+            ctx.fillText(t1, 200, 290);
+            ctx.fillStyle = '#fff'; ctx.font = '12px Courier New';
+            ctx.fillText(t2, 200, 315);
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>
